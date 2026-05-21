@@ -5,7 +5,7 @@ import io.ktor.server.response.*
 import io.ktor.server.request.*
 import io.ktor.server.routing.*
 import io.ktor.http.*
-import com.trading.users.*
+import io.ktor.server.sessions.*
 
 fun Application.registerRoutes() {
     val register = Register()
@@ -23,9 +23,17 @@ fun Application.registerRoutes() {
                 input { margin: 5px; padding: 8px; width: 200px; }
                 button { padding: 8px 20px; margin-top: 10px; }
                 .error { color: red; }
+                .success { color: green; }
+                nav { margin-bottom: 20px; }
+                nav a { margin-right: 15px; }
             </style>
         </head>
         <body>
+            <nav>
+                <a href="/register">Регистрация</a>
+                <a href="/authorization">Вход</a>
+                <a href="/quotes">Котировки</a>
+            </nav>
             <h2>Регистрация</h2>
             <form id="registerForm">
                 <input type="text" id="login" placeholder="Логин" required><br>
@@ -37,7 +45,7 @@ fun Application.registerRoutes() {
             <script>
                 const form = document.getElementById('registerForm');
                 form.onsubmit = async (event) => {
-                    event.preventDefault();  // ← Отменяем стандартную отправку
+                    event.preventDefault();
                     
                     const login = document.getElementById('login').value;
                     const password = document.getElementById('password').value;
@@ -52,8 +60,11 @@ fun Application.registerRoutes() {
                     const message = await response.text();
                     
                     if (response.ok) {
-                        console.log('Перенаправление на /authorization');
-                        window.location.href = '/authorization';
+                        msgDiv.className = 'success';
+                        msgDiv.innerHTML = message + '<br>Перенаправление на вход...';
+                        setTimeout(() => {
+                            window.location.href = '/authorization';
+                        }, 1500);
                     } else {
                         msgDiv.className = 'error';
                         msgDiv.innerHTML = message;
@@ -96,9 +107,16 @@ fun Application.registerRoutes() {
                         input { margin: 5px; padding: 8px; width: 200px; }
                         button { padding: 8px 20px; margin-top: 10px; }
                         .error { color: red; }
+                        nav { margin-bottom: 20px; }
+                        nav a { margin-right: 15px; }
                     </style>
                 </head>
                 <body>
+                    <nav>
+                        <a href="/register">Регистрация</a>
+                        <a href="/authorization">Вход</a>
+                        <a href="/quotes">Котировки</a>
+                    </nav>
                     <h2>Авторизация</h2>
                     <form id="loginForm">
                         <input type="text" id="login" placeholder="Логин" required><br>
@@ -123,7 +141,9 @@ fun Application.registerRoutes() {
                             const message = await response.text();
                             
                             if (response.ok) {
-                                window.location.href = '/quotes';
+                                // Сохраняем userId в sessionStorage
+                                sessionStorage.setItem('userId', message);
+                                window.location.href = '/portfolio';
                             } else {
                                 msgDiv.className = 'error';
                                 msgDiv.innerHTML = message;
@@ -145,15 +165,39 @@ fun Application.registerRoutes() {
                 call.respond(HttpStatusCode.BadRequest, "Missing login or password")
                 return@post
             }
-            val result = auth.authorization(login, password)
             
-            // Временная заглушка для проверки
-            if (result) {
-                println("Login successful")
-                call.respond(HttpStatusCode.OK, "Login successful")
+            val userId = auth.authorization(login, password)
+            
+            if (userId != null) {
+                // Возвращаем userId клиенту для сохранения в sessionStorage
+                call.respond(HttpStatusCode.OK, userId.toString())
             } else {
-                println("Invalid login or password")
                 call.respond(HttpStatusCode.Unauthorized, "Invalid login or password")
+            }
+        }
+        
+        get("/api/logout") {
+            call.respond(HttpStatusCode.OK, "Logout successful")
+        }
+        
+        get("/api/me") {
+            val userIdStr = call.request.queryParameters["userId"]
+            if (userIdStr.isNullOrBlank()) {
+                call.respond(HttpStatusCode.Unauthorized, "User not authenticated")
+                return@get
+            }
+            
+            val userId = userIdStr.toIntOrNull()
+            if (userId == null) {
+                call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
+                return@get
+            }
+            
+            val username = auth.getUserById(userId)
+            if (username != null) {
+                call.respond(HttpStatusCode.OK, """{"userId": $userId, "username": "$username"}""", ContentType.Application.Json)
+            } else {
+                call.respond(HttpStatusCode.NotFound, "User not found")
             }
         }
     }

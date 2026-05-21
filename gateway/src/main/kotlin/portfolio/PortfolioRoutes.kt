@@ -42,46 +42,56 @@ fun Application.configurePortfolioRoutes() {
                     <div id="message"></div>
                     
                     <script>
-                        async function loadPortfolio() {
-                            const response = await fetch('/api/portfolio');
-                            if (response.ok) {
-                                const html = await response.text();
-                                document.getElementById('portfolio').innerHTML = html;
-                            } else {
-                                document.getElementById('portfolio').innerHTML = '<p class="error">Ошибка загрузки портфеля</p>';
+                        // Получаем userId из sessionStorage
+                        const userId = sessionStorage.getItem('userId');
+                        
+                        // Если пользователь не авторизован, перенаправляем на страницу входа
+                        if (!userId) {
+                            document.getElementById('portfolio').innerHTML = '<p class="error">Требуется авторизация. <a href="/authorization">Войти</a></p>';
+                            document.getElementById('addForm').style.display = 'none';
+                        } else {
+                            async function loadPortfolio() {
+                                const response = await fetch('/api/portfolio?userId=' + userId);
+                                if (response.ok) {
+                                    const html = await response.text();
+                                    document.getElementById('portfolio').innerHTML = html;
+                                } else {
+                                    document.getElementById('portfolio').innerHTML = '<p class="error">Ошибка загрузки портфеля</p>';
+                                }
                             }
+                            
+                            document.getElementById('addForm').onsubmit = async (e) => {
+                                e.preventDefault();
+                                const quoteName = document.getElementById('quoteName').value;
+                                const quantity = document.getElementById('quantity').value;
+                                const price = document.getElementById('price').value;
+                                const msgDiv = document.getElementById('message');
+                                
+                                const response = await fetch('/api/portfolio', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                                    body: 'quoteName=' + encodeURIComponent(quoteName) + 
+                                          '&quantity=' + encodeURIComponent(quantity) + 
+                                          '&price=' + encodeURIComponent(price) +
+                                          '&userId=' + encodeURIComponent(userId)
+                                });
+                                
+                                const message = await response.text();
+                                
+                                if (response.ok) {
+                                    msgDiv.className = 'success';
+                                    msgDiv.innerHTML = message;
+                                    loadPortfolio();
+                                    document.getElementById('addForm').reset();
+                                } else {
+                                    msgDiv.className = 'error';
+                                    msgDiv.innerHTML = message;
+                                }
+                            };
+                            
+                            // Загрузить портфель при открытии страницы
+                            loadPortfolio();
                         }
-                        
-                        document.getElementById('addForm').onsubmit = async (e) => {
-                            e.preventDefault();
-                            const quoteName = document.getElementById('quoteName').value;
-                            const quantity = document.getElementById('quantity').value;
-                            const price = document.getElementById('price').value;
-                            const msgDiv = document.getElementById('message');
-                            
-                            const response = await fetch('/api/portfolio', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                                body: 'quoteName=' + encodeURIComponent(quoteName) + 
-                                      '&quantity=' + encodeURIComponent(quantity) + 
-                                      '&price=' + encodeURIComponent(price)
-                            });
-                            
-                            const message = await response.text();
-                            
-                            if (response.ok) {
-                                msgDiv.className = 'success';
-                                msgDiv.innerHTML = message;
-                                loadPortfolio();
-                                document.getElementById('addForm').reset();
-                            } else {
-                                msgDiv.className = 'error';
-                                msgDiv.innerHTML = message;
-                            }
-                        };
-                        
-                        // Загрузить портфель при открытии страницы
-                        loadPortfolio();
                     </script>
                 </body>
                 </html>
@@ -91,8 +101,17 @@ fun Application.configurePortfolioRoutes() {
 
         // GET /api/portfolio - API для получения портфеля (возвращает HTML таблицу)
         get("/api/portfolio") {
-            // Временная заглушка - в реальности нужно получать userId из сессии
-            val userId = 1 // TODO: получить из сессии/аутентификации
+            val userIdStr = call.request.queryParameters["userId"]
+            if (userIdStr.isNullOrBlank()) {
+                call.respondText("<p class=\"error\">Требуется авторизация. Пожалуйста, войдите в систему.</p>", ContentType.Text.Html)
+                return@get
+            }
+            
+            val userId = userIdStr.toIntOrNull()
+            if (userId == null) {
+                call.respondText("<p class=\"error\">Неверный ID пользователя</p>", ContentType.Text.Html)
+                return@get
+            }
             
             val items = PortfolioRepository.getPortfolio(userId)
             
@@ -126,22 +145,26 @@ fun Application.configurePortfolioRoutes() {
             val quoteName = params["quoteName"]
             val quantityStr = params["quantity"]
             val priceStr = params["price"]
+            val userIdStr = params["userId"]
             
             if (quoteName.isNullOrBlank() || quantityStr.isNullOrBlank() || priceStr.isNullOrBlank()) {
                 call.respond(HttpStatusCode.BadRequest, "Missing quoteName, quantity or price")
                 return@post
             }
             
-            val quantity = quantityStr.toIntOrNull()
-            val price = priceStr.toDoubleOrNull()?.toBigDecimal()
-            
-            if (quantity == null || price == null) {
-                call.respond(HttpStatusCode.BadRequest, "Invalid quantity or price format")
+            if (userIdStr.isNullOrBlank()) {
+                call.respond(HttpStatusCode.Unauthorized, "User not authenticated")
                 return@post
             }
             
-            // Временная заглушка - в реальности нужно получать userId из сессии
-            val userId = 1 // TODO: получить из сессии/аутентификации
+            val quantity = quantityStr.toIntOrNull()
+            val price = priceStr.toDoubleOrNull()?.toBigDecimal()
+            val userId = userIdStr.toIntOrNull()
+            
+            if (quantity == null || price == null || userId == null) {
+                call.respond(HttpStatusCode.BadRequest, "Invalid quantity, price or userId format")
+                return@post
+            }
             
             val result = PortfolioRepository.addOrUpdatePortfolioItem(userId, quoteName, quantity, price)
             
@@ -155,14 +178,23 @@ fun Application.configurePortfolioRoutes() {
         // DELETE /api/portfolio/{quoteName} - удалить позицию из портфеля
         delete("/api/portfolio/{quoteName}") {
             val quoteName = call.parameters["quoteName"]
+            val userIdStr = call.request.queryParameters["userId"]
             
             if (quoteName.isNullOrBlank()) {
                 call.respond(HttpStatusCode.BadRequest, "Missing quoteName")
                 return@delete
             }
             
-            // Временная заглушка - в реальности нужно получать userId из сессии
-            val userId = 1 // TODO: получить из сессии/аутентификации
+            if (userIdStr.isNullOrBlank()) {
+                call.respond(HttpStatusCode.Unauthorized, "User not authenticated")
+                return@delete
+            }
+            
+            val userId = userIdStr.toIntOrNull()
+            if (userId == null) {
+                call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
+                return@delete
+            }
             
             val result = PortfolioRepository.removePortfolioItem(userId, quoteName)
             
